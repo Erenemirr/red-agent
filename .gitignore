@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Sanal ortam
+.venv/
+
+# Gizli anahtarlar — ASLA commit etme
+.env
+
+# Üretilen raporlar
+reports/*.json
+reports/*.md
+
+# Loglar / OS
+*.log
+.DS_Store

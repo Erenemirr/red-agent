@@ -1,0 +1,24 @@
+# --- Agent orchestration ---
+langgraph>=0.2.0
+langchain-core>=0.3.0
+
+# --- LLM (Gemini / Google AI Studio) — modern SDK ---
+google-genai>=1.0.0
+
+# --- Observability / Tracing (Arize Phoenix) ---
+arize-phoenix-otel>=0.6.0
+arize-phoenix-client>=1.0.0
+openinference-instrumentation-langchain>=0.1.0
+openinference-instrumentation-google-genai>=1.0.0
+opentelemetry-sdk>=1.42.0
+
+# --- API servis ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# --- Yardımcılar ---
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# --- Test ---
+pytest>=8.0.0
