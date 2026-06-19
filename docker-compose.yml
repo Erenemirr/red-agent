@@ -1,0 +1,14 @@
+# Red Team Agent — tek komutla çalıştırma: docker compose up --build
+services:
+  api:
+    build: .
+    container_name: red-team-agent
+    ports:
+      - "8000:8000"
+    # Gizli anahtarlar imaja gömülmez — çalışma anında .env'den enjekte edilir.
+    env_file:
+      - .env
+    # Üretilen raporlar host makinede kalsın.
+    volumes:
+      - ./reports:/app/reports
+    restart: unless-stopped

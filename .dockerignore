@@ -1,0 +1,13 @@
+# İmaja girmemesi gerekenler (boyut + güvenlik)
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+.env
+reports/*.json
+reports/*.md
+*.log
+.DS_Store
