@@ -234,7 +234,9 @@ gets smarter across sessions, not just within one.
 
 **12 techniques (HOW):** role-playing, indirect-injection, context-overflow, persona-switching,
 incremental-escalation, authority-claim, token-smuggling, refusal-suppression, crescendo,
-many-shot, payload-splitting, virtualization.
+many-shot, payload-splitting, virtualization. Hand-curated; example prompts are *inspired by*
+[Garak](https://github.com/NVIDIA/garak) probe families (e.g. `dan`, `encoding`, `promptinject`) —
+each category's `garak_probe` field cites its inspiration. (Garak itself is not a dependency.)
 
 **105 objectives (WHAT):** 100 from JailbreakBench (Malware, Privacy, Fraud, Disinformation, …)
 + 5 LLM-security goals (system-prompt leak, PII exfiltration, policy bypass, phishing).
