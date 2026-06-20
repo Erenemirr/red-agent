@@ -22,6 +22,19 @@ from agents.state import AttackAttempt, RedTeamState
 logger = logging.getLogger(__name__)
 
 
+def _tech_obj_matrix(history: list[AttackAttempt]) -> dict[tuple[str, str], dict]:
+    """(teknik, hedef_kategorisi) -> {attempts, successes} kırılımı."""
+    matrix: dict[tuple[str, str], dict] = {}
+    for a in history:
+        tech = a.get("category", "?")
+        objc = a.get("objective_category") or "?"
+        m = matrix.setdefault((tech, objc), {"attempts": 0, "successes": 0})
+        m["attempts"] += 1
+        if a.get("verdict", {}).get("success"):
+            m["successes"] += 1
+    return matrix
+
+
 def _summarize(history: list[AttackAttempt]) -> dict:
     """Geçmişten özet metrikler çıkar."""
     total = len(history)
@@ -85,6 +98,27 @@ def build_markdown(state: RedTeamState, summary: dict) -> str:
             lines.append(f"- `{cat}` → {n} başarılı")
         lines.append("")
 
+    # --- Teknik × Hedef kırılımı ---
+    matrix = _tech_obj_matrix(history)
+    if matrix:
+        lines.append("## Teknik × Hedef Kırılımı\n")
+        lines.append("Hangi teknik (HOW), hangi hedef kategorisinde (WHAT) işe yaradı "
+                     "— başarılı/deneme:\n")
+        lines.append("| Teknik | Hedef kategorisi | Sonuç |")
+        lines.append("|---|---|---|")
+        for (tech, objc), m in sorted(
+            matrix.items(), key=lambda kv: -(kv[1]["successes"] / kv[1]["attempts"])
+        ):
+            mark = " ✓" if m["successes"] else ""
+            lines.append(f"| `{tech}` | {objc} | {m['successes']}/{m['attempts']}{mark} |")
+        lines.append("")
+        winners = [(k, v) for k, v in matrix.items() if v["successes"] > 0]
+        if winners:
+            (tech, objc), m = max(winners, key=lambda kv: kv[1]["successes"] / kv[1]["attempts"])
+            rate = m["successes"] / m["attempts"] * 100
+            lines.append(f"**Zayıf nokta:** `{tech}` × {objc} (%{rate:.0f} başarı) — "
+                         f"bu teknik–hedef eşleşmesini öncelikli sertleştirin.\n")
+
     # --- Teknik detay ---
     lines.append("## Teknik Detay — Başarılı Saldırılar\n")
     if not successes:
@@ -133,6 +167,11 @@ def build_json(state: RedTeamState, summary: dict) -> dict:
         "rounds_run": state.get("current_round", 0),
         "max_rounds": state.get("max_rounds", settings.max_rounds),
         "summary": summary,
+        "technique_objective_breakdown": [
+            {"technique": tech, "objective_category": objc,
+             "attempts": m["attempts"], "successes": m["successes"]}
+            for (tech, objc), m in _tech_obj_matrix(state.get("attack_history", [])).items()
+        ],
         "human_interrupt_count": state.get("human_interrupt_count", 0),
         "human_decisions": state.get("human_decisions", []),
         "phoenix_insights": state.get("phoenix_insights", {}),

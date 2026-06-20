@@ -13,6 +13,9 @@ __pycache__/
 reports/*.json
 reports/*.md
 
+# LangGraph dev runtime
+.langgraph_api/
+
 # Loglar / OS
 *.log
 .DS_Store

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Run içinde her turda Phoenix'i tekrar tekrar sorgulamamak için kısa süreli cache.
 _CACHE_TTL_SEC = 60
-_cache: dict = {"ts": 0.0, "stats": None}
+_cache: dict = {"ts": 0.0, "attacks": None}
 
 
 class PhoenixInsightSource:
@@ -46,19 +46,18 @@ class PhoenixInsightSource:
             api_key=settings.phoenix_api_key,
         )
 
-    def get_category_stats(self, limit: int = 5000) -> dict | None:
-        """Run'lar arası kategori istatistiği döndür.
+    def _marker_attacks(self, limit: int = 5000) -> list[dict] | None:
+        """Phoenix'teki `attack_evaluation` span'lerinin attack dict'lerini döndür.
 
-        { kategori: {"attempts": n, "successes": k, "score_sum": float} }
-        Bağlantı yoksa / işaretli span yoksa None.
+        Tek sorgu; sonuç cache'lenir (aynı run'da her tur tekrar sorgulamamak için).
+        Hem kategori hem teknik×hedef istatistiği bundan türetilir.
         """
         if not self.available():
             return None
 
-        # Kısa süreli cache — aynı run'da her tur yeniden sorgulamayı önler.
         now = time.time()
-        if _cache["stats"] is not None and (now - _cache["ts"]) < _CACHE_TTL_SEC:
-            return _cache["stats"]
+        if _cache["attacks"] is not None and (now - _cache["ts"]) < _CACHE_TTL_SEC:
+            return _cache["attacks"]
 
         try:
             df = self._client().spans.get_spans_dataframe(
@@ -69,38 +68,54 @@ class PhoenixInsightSource:
             logger.info("Phoenix sorgusu atlandı: %s", exc)
             return None
 
-        # Phoenix iç içe attribute'ları (attack.category, attack.score...) tek bir
-        # `attributes.attack` kolonunda DICT olarak toplar.
+        # Phoenix iç içe attribute'ları tek bir `attributes.attack` DICT kolonunda toplar.
         col = "attributes.attack"
         if df is None or len(df) == 0 or col not in df.columns:
-            _cache.update(ts=now, stats=None)
+            _cache.update(ts=now, attacks=None)
             return None
 
-        marker = df[df[col].notna()]
-        if len(marker) == 0:
-            _cache.update(ts=now, stats=None)
-            return None
+        attacks = [row for row in df[col].tolist() if isinstance(row, dict)]
+        _cache.update(ts=now, attacks=attacks or None)
+        if attacks:
+            logger.info("Phoenix: %d run'lar-arası işaretli span okundu.", len(attacks))
+        return attacks or None
 
+    def get_category_stats(self, limit: int = 5000) -> dict | None:
+        """Run'lar arası kategori istatistiği: {kategori: {attempts, successes, score_sum}}."""
+        attacks = self._marker_attacks(limit)
+        if not attacks:
+            return None
         stats: dict[str, dict] = {}
-        for _, row in marker.iterrows():
-            attack = row.get(col)
-            if not isinstance(attack, dict):
-                continue
-            cat = str(attack.get("category", "")).strip()
+        for a in attacks:
+            cat = str(a.get("category", "")).strip()
             if not cat:
                 continue
-            score = _to_float(attack.get("score"))
-            success = _truthy(attack.get("success"))
             s = stats.setdefault(cat, {"attempts": 0, "successes": 0, "score_sum": 0.0})
             s["attempts"] += 1
-            s["score_sum"] += score
-            if success:
+            s["score_sum"] += _to_float(a.get("score"))
+            if _truthy(a.get("success")):
                 s["successes"] += 1
+        return stats or None
 
-        _cache.update(ts=now, stats=stats)
-        logger.info("Phoenix: %d run'lar-arası işaretli span okundu, %d kategori.",
-                    len(marker), len(stats))
-        return stats
+    def get_technique_objective_stats(self, limit: int = 5000) -> dict | None:
+        """Run'lar arası teknik×hedef istatistiği:
+        {hedef_kategorisi: {teknik: {attempts, successes, score_sum}}}."""
+        attacks = self._marker_attacks(limit)
+        if not attacks:
+            return None
+        matrix: dict[str, dict] = {}
+        for a in attacks:
+            tech = str(a.get("category", "")).strip()
+            objc = str(a.get("objective_category", "")).strip() or "?"
+            if not tech:
+                continue
+            techs = matrix.setdefault(objc, {})
+            s = techs.setdefault(tech, {"attempts": 0, "successes": 0, "score_sum": 0.0})
+            s["attempts"] += 1
+            s["score_sum"] += _to_float(a.get("score"))
+            if _truthy(a.get("success")):
+                s["successes"] += 1
+        return matrix or None
 
 
 def _to_float(value) -> float:

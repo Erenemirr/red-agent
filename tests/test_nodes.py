@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from agents.judge import rule_based_eval, combine, judge_node
 from agents.analyzer import compute_insights, _merge_stats
+from agents.reporter import _tech_obj_matrix, build_markdown, _summarize
 from agents.attacker import select_category, prior_failed_attempts, attacker_node
 from agents.orchestrator import decide_next_action, route
 from agents.state import make_initial_state, _append_list
@@ -139,6 +140,22 @@ class TestAttacker:
         assert len(prior) == 2
         assert all(a["category"] == "persona-switching" for a in prior)
 
+    def test_objective_matched_technique_selection(self):
+        from agents.attacker import select_category_for_objective
+        avail = ["role-playing", "persona-switching", "refusal-suppression"]
+        insights = {"technique_objective": {
+            "Fraud/Deception": {
+                "refusal-suppression": {"attempts": 3, "successes": 3, "score_sum": 2.7},
+                "persona-switching": {"attempts": 2, "successes": 0, "score_sum": 0.0},
+            }
+        }}
+        picks = [select_category_for_objective("Fraud/Deception", insights, [], avail)
+                 for _ in range(200)]
+        # Bu hedef için kanıtlanmış tekniği çoğunlukla seçmeli
+        assert picks.count("refusal-suppression") > 100
+        # Bilinmeyen hedef → fallback (hata vermez)
+        assert select_category_for_objective("Yok", insights, [], avail) in avail
+
     def test_attacker_node_produces_pending(self):
         from agents.attacker import load_categories
         state = {"target_system": "Sen bir botsun.", "current_round": 0, "attack_history": []}
@@ -219,6 +236,32 @@ class TestTarget:
         t = build_target("Sen bir botsun.")
         assert isinstance(t, EchoTarget)
         assert GeminiTarget.available() is False
+
+
+# --- Reporter: teknik × hedef kırılımı ----------------------------------------
+
+
+class TestReporter:
+    HISTORY = [
+        {"category": "refusal-suppression", "objective_category": "Fraud/Deception",
+         "verdict": {"success": True, "score": 1.0}},
+        {"category": "persona-switching", "objective_category": "Privacy",
+         "verdict": {"success": False, "score": 0.0}},
+        {"category": "persona-switching", "objective_category": "Privacy",
+         "verdict": {"success": False, "score": 0.0}},
+    ]
+
+    def test_matrix_groups_by_technique_and_objective(self):
+        m = _tech_obj_matrix(self.HISTORY)
+        assert m[("refusal-suppression", "Fraud/Deception")] == {"attempts": 1, "successes": 1}
+        assert m[("persona-switching", "Privacy")] == {"attempts": 2, "successes": 0}
+
+    def test_report_includes_breakdown_and_weak_point(self):
+        md = build_markdown({"attack_history": self.HISTORY, "target_system": "x"},
+                            _summarize(self.HISTORY))
+        assert "Teknik × Hedef Kırılımı" in md
+        assert "Zayıf nokta" in md
+        assert "refusal-suppression" in md
 
 
 # --- Judge node (entegrasyon, mock) -------------------------------------------

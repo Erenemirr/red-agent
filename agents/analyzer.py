@@ -133,18 +133,58 @@ def _merge_stats(a: dict, b: dict) -> dict:
     return out
 
 
+def _tech_obj_stats(history: list[AttackAttempt]) -> dict:
+    """Yerel teknik×hedef matrisi: {hedef_kategorisi: {teknik: {attempts, successes, score_sum}}}."""
+    matrix: dict[str, dict] = {}
+    for a in history:
+        tech = a.get("category")
+        if not tech:
+            continue
+        objc = a.get("objective_category") or "?"
+        v = a.get("verdict", {})
+        techs = matrix.setdefault(objc, {})
+        s = techs.setdefault(tech, {"attempts": 0, "successes": 0, "score_sum": 0.0})
+        s["attempts"] += 1
+        s["score_sum"] += float(v.get("score", 0.0))
+        if v.get("success"):
+            s["successes"] += 1
+    return matrix
+
+
+def _merge_tech_obj(a: dict, b: dict) -> dict:
+    """İki teknik×hedef matrisini topla."""
+    out: dict[str, dict] = {}
+    for src in (a, b):
+        for objc, techs in src.items():
+            o = out.setdefault(objc, {})
+            for tech, s in techs.items():
+                t = o.setdefault(tech, {"attempts": 0, "successes": 0, "score_sum": 0.0})
+                t["attempts"] += s["attempts"]
+                t["successes"] += s["successes"]
+                t["score_sum"] += s["score_sum"]
+    return out
+
+
 def analyzer_node(state: RedTeamState) -> dict:
     """LangGraph node: yerel + Phoenix (run'lar arası) içgörüyü birleştir."""
     history = list(state.get("attack_history", []))
     current_round = state.get("current_round", 0)
 
-    # Phoenix bağlıysa geçmiş run'ların kategori istatistiğini çek (cross-run öğrenme).
+    # Phoenix bağlıysa geçmiş run'ların istatistiğini çek (cross-run öğrenme).
     phoenix_stats = None
+    phoenix_tech_obj = None
     source = PhoenixInsightSource()
     if source.available():
         phoenix_stats = source.get_category_stats()
+        phoenix_tech_obj = source.get_technique_objective_stats()
 
     insights = compute_insights(history, current_round, phoenix_stats=phoenix_stats)
+
+    # Teknik×hedef matrisi (yerel + Phoenix) → Attacker eşleştirerek öğrensin.
+    tech_obj = _tech_obj_stats(history)
+    if phoenix_tech_obj:
+        tech_obj = _merge_tech_obj(tech_obj, phoenix_tech_obj)
+    insights = {**insights, "technique_objective": tech_obj}
 
     logger.info(
         "analyzer_node: tur %d | top=%s | failing=%s | phoenix=%s",

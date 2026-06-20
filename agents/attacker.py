@@ -1,8 +1,9 @@
 """Attacker node — saldırı stratejisi ve prompt üretimi.
 
-İki kaynaktan beslenir (CLAUDE.md):
-  1. Repertuar: `data/attack_categories.json` — Garak/JailbreakBench kategorileri
-     ve örnek prompt şablonları.
+İki kaynaktan beslenir:
+  1. Repertuar: `data/attack_categories.json` — teknik kategorileri (örnek prompt'lar
+     Garak probe ailelerinden ilham alınarak yazıldı) + `jailbreak_objectives.json`
+     (JailbreakBench hedefleri).
   2. `phoenix_insights`: Analyzer'ın geçmiş trace'lerden çıkardığı öğrenimler —
      hangi kategoriler işe yaradı, hangi pattern'ler sürekli başarısız.
 
@@ -125,6 +126,34 @@ def select_category(
     etiket = "epsilon-keşif" if insight_cats else "keşif (insight yok)"
     logger.info("Attacker: %s -> %s", etiket, chosen)
     return chosen
+
+
+def select_category_for_objective(
+    objective_category: str,
+    insights: PhoenixInsights | None,
+    history: list[AttackAttempt],
+    available: list[str],
+) -> str:
+    """Bu HEDEF kategorisinde geçmişte en iyi işleyen tekniği seç (eşleştirerek öğrenme).
+
+    `technique_objective` matrisinde bu hedef için kazanan bir teknik varsa onu
+    (epsilon-greedy ile) sömürür; veri yoksa veya keşif dalında genel `select_category`'ye
+    düşer. Böylece "hangi hedefe hangi teknik" seviyesinde öğrenilir.
+    """
+    matrix = (insights or {}).get("technique_objective") or {}
+    stats = matrix.get(objective_category)
+    if stats:
+        def smoothed(s):
+            return (s["successes"] + 1) / (s["attempts"] + 2)
+        ranked = sorted(stats.items(), key=lambda kv: smoothed(kv[1]), reverse=True)
+        winners = [t for t, s in ranked if s["successes"] > 0 and t in available]
+        # %(1-ε) → bu hedef için kanıtlanmış tekniği sömür.
+        if winners and random.random() >= settings.explore_epsilon:
+            logger.info("Attacker: hedef-eşleştirmeli sömürü (%s → %s)",
+                        objective_category, winners[0])
+            return winners[0]
+    # Veri yok / keşif dalı → genel teknik seçimi.
+    return select_category(insights, history, available)
 
 
 # --- Prompt üretimi ------------------------------------------------------------
@@ -284,11 +313,15 @@ def attacker_node(state: RedTeamState) -> dict:
     insights = state.get("phoenix_insights")
     history = list(state.get("attack_history", []))
 
-    category_id = select_category(insights, history, available)
-    spec = categories[category_id]
-
-    # Saldırı HEDEFİ (objective) seç — teknik (kategori) × hedef (objective).
+    # Önce HEDEF (objective/WHAT) seç, sonra o hedef kategorisinde en iyi TEKNİĞİ
+    # (category/HOW) seç — "hangi hedefe hangi teknik" eşleştirerek öğrenme.
     objective = select_objective(load_objectives())
+    objective_category = objective.get("category", "")
+
+    category_id = select_category_for_objective(
+        objective_category, insights, history, available
+    )
+    spec = categories[category_id]
 
     # PAIR: bu kategorinin geçmiş başarısız denemelerini topla → attacker iyileştirsin.
     prior = prior_failed_attempts(history, category_id)
@@ -309,6 +342,7 @@ def attacker_node(state: RedTeamState) -> dict:
         "round": next_round,
         "category": category_id,
         "objective": objective.get("goal", ""),
+        "objective_category": objective.get("category", ""),
         "strategy": strategy,
         "prompt": prompt,
         "response": "",          # Target node dolduracak

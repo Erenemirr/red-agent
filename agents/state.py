@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, TypedDict
 
-# Saldırı kategorileri — Garak/JailbreakBench repertuarı (data/attack_categories.json).
+# Saldırı kategorileri (teknikler) — data/attack_categories.json. Örnek prompt'lar
+# Garak probe ailelerinden ilham alınarak yazıldı (Garak entegre değildir).
 AttackCategory = Literal[
     "role-playing",
     "indirect-injection",
@@ -57,6 +58,7 @@ class AttackAttempt(TypedDict, total=False):
     round: int                         # bu denemenin tur numarası
     category: AttackCategory           # kullanılan saldırı kategorisi (teknik/HOW)
     objective: str                     # saldırının hedefi (JailbreakBench goal/WHAT)
+    objective_category: str            # hedefin kategorisi (Privacy, Fraud/Deception...)
     strategy: str                      # attacker'ın o turdaki stratejisi
     prompt: str                        # hedefe gönderilen saldırı prompt'u
     response: str                      # hedefin yanıtı
@@ -84,6 +86,8 @@ class PhoenixInsights(TypedDict, total=False):
     avg_score_trend: list[float]       # tur tur ortalama skor trendi
     recommendations: list[str]         # attacker'a somut tavsiyeler
     last_updated_round: int            # bu insight'ın hangi turda üretildiği
+    # Teknik×hedef öğrenmesi: {hedef_kategorisi: {teknik: {attempts, successes, score_sum}}}
+    technique_objective: dict          # hangi hedefte hangi teknik işe yarıyor
 
 
 class RedTeamState(TypedDict, total=False):

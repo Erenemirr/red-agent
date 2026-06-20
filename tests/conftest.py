@@ -17,8 +17,10 @@ import pytest
 @pytest.fixture(autouse=True)
 def _hermetic(monkeypatch):
     monkeypatch.setattr("tools.gemini.available", lambda: False)
-    from tools.phoenix_mcp import PhoenixInsightSource
 
+    from tools.phoenix_mcp import PhoenixInsightSource
+    
     monkeypatch.setattr(PhoenixInsightSource, "available", staticmethod(lambda: False))
     random.seed(1337)
-    yield
+    yield 
+

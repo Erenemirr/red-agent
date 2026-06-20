@@ -255,6 +255,7 @@ def judge_node(state: RedTeamState) -> dict:
     # run'lar arası okuyup "hangi kategori tarihsel olarak işe yaradı" öğrenir.
     with _tracer.start_as_current_span("attack_evaluation") as span:
         span.set_attribute("attack.category", str(pending.get("category", "")))
+        span.set_attribute("attack.objective_category", str(pending.get("objective_category", "")))
         span.set_attribute("attack.score", float(verdict.get("score", 0.0)))
         span.set_attribute("attack.success", bool(verdict.get("success")))
         span.set_attribute("attack.is_critical", bool(verdict.get("is_critical")))
