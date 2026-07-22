@@ -53,7 +53,7 @@ Attacker toward what has worked — even across separate sessions.
   REST `/resume` endpoint), powered by LangGraph `interrupt()` + checkpointing.
 - **Full observability** — every node and Gemini call traced to Arize Phoenix.
 - **Three interfaces** — CLI, REST API (FastAPI), and LangGraph Studio. Containerized with Docker.
-- **33 hermetic tests** — run with zero API quota (mock mode), deterministic, fast.
+- **83 hermetic tests** — run with zero API quota (mock mode), deterministic, fast.
 
 ---
 
@@ -120,7 +120,7 @@ red-agent/
 │   ├── attack_categories.json    # 12 attack techniques
 │   ├── jailbreak_objectives.json # 105 objectives (JailbreakBench + LLM-security)
 │   └── target_systems/           # example target system prompts
-├── tests/                  # 33 hermetic tests
+├── tests/                  # 83 hermetic tests
 ├── reports/                # generated reports
 ├── Dockerfile / docker-compose.yml
 └── requirements.txt
@@ -212,7 +212,7 @@ docker compose up --build      # API on http://localhost:8000
 ### Tests
 
 ```bash
-pytest            # 33 hermetic tests, no API quota used
+pytest            # 83 hermetic tests, no API quota used
 pytest -v         # verbose
 ```
 
