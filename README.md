@@ -39,10 +39,14 @@ Attacker toward what has worked — even across separate sessions.
 - **Self-improvement loop** — Analyzer reads past traces from Phoenix (cross-run learning).
 - **Two-layer judge** — fast rule-based detection (PII, system-prompt leak, persona, etc.)
   + LLM-as-a-judge (Gemini, structured JSON, 0.0–1.0 score).
+- **Multi-turn attacks** — a *campaign* holds a stateful conversation with the target
+  (up to `MAX_TURNS`); the attacker sees each response and *escalates*, so techniques like
+  crescendo and incremental-escalation actually work across turns.
 - **Adaptive attacker intelligence:**
   - *Epsilon-greedy* category selection (explore vs exploit, avoids collapse onto one winner).
   - *PAIR* prompt refinement (learns from failed attempts, tries genuinely different angles).
   - *Laplace smoothing* on success rates (a single lucky success doesn't dominate).
+  - *Objective × technique* learning (picks the best technique for each objective type).
 - **12 attack techniques × 105 objectives** — objectives sourced from the real
   [JailbreakBench](https://github.com/JailbreakBench/jailbreakbench) benchmark + LLM-security goals.
 - **Human-in-the-loop** — pauses at a configurable critical-finding threshold (CLI prompt or
@@ -252,7 +256,8 @@ the target leak its system prompt."*
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model (free-tier friendly) |
 | `PHOENIX_API_KEY` | — | Phoenix Cloud key (empty → tracing off) |
 | `PHOENIX_COLLECTOR_ENDPOINT` | — | Space-specific Phoenix URL |
-| `MAX_ROUNDS` | `10` | Max attack rounds |
+| `MAX_ROUNDS` | `10` | Max attack rounds (turns) |
+| `MAX_TURNS` | `3` | Max conversation turns per multi-turn campaign |
 | `CRITICAL_FINDINGS_FOR_INTERRUPT` | `3` | Critical findings before human checkpoint |
 | `CRITICAL_SCORE_THRESHOLD` | `0.8` | Score ≥ this is "critical" |
 | `SUCCESS_SCORE_THRESHOLD` | `0.6` | Score ≥ this is a "successful" attack |

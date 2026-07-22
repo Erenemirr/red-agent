@@ -59,6 +59,7 @@ class AttackAttempt(TypedDict, total=False):
     category: AttackCategory           # kullanılan saldırı kategorisi (teknik/HOW)
     objective: str                     # saldırının hedefi (JailbreakBench goal/WHAT)
     objective_category: str            # hedefin kategorisi (Privacy, Fraud/Deception...)
+    campaign_turn: int                 # çok-turlu kampanya içindeki tur (1, 2, 3...)
     strategy: str                      # attacker'ın o turdaki stratejisi
     prompt: str                        # hedefe gönderilen saldırı prompt'u
     response: str                      # hedefin yanıtı
@@ -104,6 +105,15 @@ class RedTeamState(TypedDict, total=False):
     # Judge verdict ekleyip attack_history'e taşır. "Son yazan kazanır" alanı —
     # append-only listelerde çift kayıt oluşmasını engeller.
     pending_attempt: AttackAttempt
+
+    # --- Çok-turlu kampanya durumu ---
+    # Bir kampanya = tek (objektif+teknik) için çok-turlu konuşma. Target durumlu
+    # olsun ve Attacker önceki yanıtı görüp tırmandırsın diye tutulur.
+    conversation: list                 # [{role: 'user'|'model', content}] — aktif kampanya
+    campaign_active: bool              # devam eden bir kampanya var mı?
+    campaign_turn: int                 # kampanya içindeki tur numarası
+    campaign_objective: dict           # kampanyanın sabit hedefi (objective)
+    campaign_category: str             # kampanyanın sabit tekniği
 
     # --- Geçmiş ve birikim (append-only listeler) ---
     attack_history: Annotated[list[AttackAttempt], _append_list]
@@ -158,6 +168,9 @@ def make_initial_state(
         current_round=0,
         max_rounds=max_rounds,
         critical_count=0,
+        conversation=[],
+        campaign_active=False,
+        campaign_turn=0,
         phoenix_insights=PhoenixInsights(
             top_categories=[],
             failing_patterns=[],

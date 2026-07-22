@@ -46,8 +46,17 @@ class TargetSystem(ABC):
 
     @abstractmethod
     def generate(self, attack_prompt: str) -> TargetResponse:
-        """Saldırı prompt'una hedefin yanıtını üret."""
+        """Saldırı prompt'una hedefin yanıtını üret (tek-tur)."""
         raise NotImplementedError
+
+    def generate_conversation(self, messages: list[dict]) -> TargetResponse:
+        """Çok-turlu: tüm konuşmayı işleyip yanıt üret.
+
+        Varsayılan (durumsuz) davranış: yalnızca son mesajı işler. Durumlu
+        backend'ler (GeminiTarget) bunu override edip tüm geçmişi gönderir.
+        """
+        last = messages[-1].get("content", "") if messages else ""
+        return self.generate(last)
 
     @property
     @abstractmethod
@@ -108,6 +117,26 @@ class GeminiTarget(TargetSystem):
             logger.warning("GeminiTarget çağrısı başarısız: %s", exc)
             return TargetResponse(text="", model=self._model_name, error=str(exc))
 
+    def generate_conversation(self, messages: list[dict]) -> TargetResponse:
+        """Durumlu: tüm konuşmayı Gemini'ye gönder (hedef önceki turları hatırlar)."""
+        try:
+            result = gemini.generate_chat(
+                "target",
+                messages,
+                system_instruction=self.system_prompt,
+                temperature=self._temperature,
+            )
+            text = gemini.safe_text(result)
+            if not text:
+                return TargetResponse(
+                    text="", model=self._model_name,
+                    error=f"boş yanıt ({gemini.block_reason(result)})",
+                )
+            return TargetResponse(text=text, model=self._model_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("GeminiTarget konuşma çağrısı başarısız: %s", exc)
+            return TargetResponse(text="", model=self._model_name, error=str(exc))
+
 
 class EchoTarget(TargetSystem):
     """API'siz çalışan mock hedef — geliştirme/test için.
@@ -160,16 +189,20 @@ def target_node(state: RedTeamState) -> dict:
         logger.warning("target_node: gönderilecek prompt yok.")
         return {}
 
-    target = build_target(state.get("target_system", ""))
-    result = target.generate(pending["prompt"])
+    # Çok-turlu: attacker mesajını konuşmaya ekle, hedefe TÜM konuşmayı gönder.
+    conversation = list(state.get("conversation", []))
+    conversation.append({"role": "user", "content": pending["prompt"]})
 
-    # Hedef yanıtını (veya hata durumunda boş metni) pending kayda işle.
-    updated: AttackAttempt = {
-        **pending,
-        "response": result.text if result.ok else f"[HATA] {result.error}",
-    }
+    target = build_target(state.get("target_system", ""))
+    result = target.generate_conversation(conversation)
+    text = result.text if result.ok else f"[HATA] {result.error}"
+
+    conversation.append({"role": "model", "content": text})
+
+    # Hedef yanıtını pending kayda işle.
+    updated: AttackAttempt = {**pending, "response": text}
     logger.info(
-        "target_node: model=%s ok=%s yanıt_len=%d",
-        result.model, result.ok, len(result.text),
+        "target_node: model=%s ok=%s tur=%d yanıt_len=%d",
+        result.model, result.ok, len(conversation) // 2, len(result.text),
     )
-    return {"pending_attempt": updated}
+    return {"pending_attempt": updated, "conversation": conversation}

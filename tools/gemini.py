@@ -81,6 +81,42 @@ def generate(
     )
 
 
+def generate_chat(
+    role: str,
+    messages: list[dict],
+    *,
+    system_instruction: str | None = None,
+    temperature: float = 0.7,
+    max_output_tokens: int | None = None,
+):
+    """Çok-turlu (durumlu) Gemini çağrısı — tüm konuşmayı gönderir.
+
+    messages: [{"role": "user"|"model", "content": str}, ...]
+    Hedef, önceki turları hatırlar (crescendo/incremental-escalation için şart).
+    """
+    from google.genai import types
+
+    client = get_client()
+    contents = [
+        {"role": m.get("role", "user"), "parts": [{"text": m.get("content", "")}]}
+        for m in messages
+    ]
+    config_kwargs: dict = {
+        "temperature": temperature,
+        "max_output_tokens": max_output_tokens or settings.gemini_max_output_tokens,
+        "thinking_config": types.ThinkingConfig(thinking_budget=0),
+    }
+    if system_instruction:
+        config_kwargs["system_instruction"] = system_instruction
+
+    usage.record(role)
+    return client.models.generate_content(
+        model=settings.gemini_model,
+        contents=contents,
+        config=types.GenerateContentConfig(**config_kwargs),
+    )
+
+
 def safe_text(response) -> str:
     """response.text'i güvenli oku (bloklanmışsa raise edebilir)."""
     try:

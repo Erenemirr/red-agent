@@ -277,6 +277,12 @@ def judge_node(state: RedTeamState) -> dict:
     if verdict.get("is_critical"):
         update["critical_count"] = state.get("critical_count", 0) + 1
 
+    # Çok-turlu: kampanya bitti mi? Başarı → yakalandı; max_turns → pes et.
+    # Aktif kalırsa Attacker aynı konuşmayı bir sonraki turda tırmandırır.
+    campaign_turn = state.get("campaign_turn", 1)
+    campaign_ended = bool(verdict.get("success")) or campaign_turn >= settings.max_turns
+    update["campaign_active"] = not campaign_ended
+
     logger.info(
         "judge_node: kategori=%s skor=%.2f success=%s critical=%s",
         pending.get("category"),
