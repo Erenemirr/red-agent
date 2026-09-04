@@ -29,6 +29,7 @@ class TargetResponse:
     text: str                    # modelin ürettiği yanıt metni
     model: str                   # yanıtı üreten model adı
     error: str | None = None     # çağrı başarısızsa hata mesajı
+    infra_error: bool = False    # hata altyapı/kota kaynaklı mı (hedef savunması değil)?
 
     @property
     def ok(self) -> bool:
@@ -115,7 +116,10 @@ class GeminiTarget(TargetSystem):
             return TargetResponse(text=text, model=self._model_name)
         except Exception as exc:  # noqa: BLE001 - dış API hatasını yumuşat
             logger.warning("GeminiTarget çağrısı başarısız: %s", exc)
-            return TargetResponse(text="", model=self._model_name, error=str(exc))
+            return TargetResponse(
+                text="", model=self._model_name, error=str(exc),
+                infra_error=gemini._is_rate_limit_error(exc),
+            )
 
     def generate_conversation(self, messages: list[dict]) -> TargetResponse:
         """Durumlu: tüm konuşmayı Gemini'ye gönder (hedef önceki turları hatırlar)."""
@@ -135,7 +139,10 @@ class GeminiTarget(TargetSystem):
             return TargetResponse(text=text, model=self._model_name)
         except Exception as exc:  # noqa: BLE001
             logger.warning("GeminiTarget konuşma çağrısı başarısız: %s", exc)
-            return TargetResponse(text="", model=self._model_name, error=str(exc))
+            return TargetResponse(
+                text="", model=self._model_name, error=str(exc),
+                infra_error=gemini._is_rate_limit_error(exc),
+            )
 
 
 class EchoTarget(TargetSystem):
@@ -195,12 +202,24 @@ def target_node(state: RedTeamState) -> dict:
 
     target = build_target(state.get("target_system", ""))
     result = target.generate_conversation(conversation)
-    text = result.text if result.ok else f"[HATA] {result.error}"
 
+    # Kota/altyapı hatası (429): bu bir hedef yanıtı DEĞİL. Konuşmaya sahte bir
+    # "model" turu ekleme (kampanyayı kirletir) ve pending'i infra_error diye
+    # işaretle — Judge bunu öğrenmeye yazmadan atlar.
+    if result.infra_error:
+        updated: AttackAttempt = {
+            **pending,
+            "response": f"[ALTYAPI HATASI] {result.error}",
+            "infra_error": True,
+        }
+        logger.warning("target_node: kota/altyapı hatası — tur atlanacak (%s).", result.error)
+        return {"pending_attempt": updated}  # conversation'a dokunma
+
+    text = result.text if result.ok else f"[HATA] {result.error}"
     conversation.append({"role": "model", "content": text})
 
     # Hedef yanıtını pending kayda işle.
-    updated: AttackAttempt = {**pending, "response": text}
+    updated = {**pending, "response": text}
     logger.info(
         "target_node: model=%s ok=%s tur=%d yanıt_len=%d",
         result.model, result.ok, len(conversation) // 2, len(result.text),

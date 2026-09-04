@@ -245,6 +245,18 @@ def judge_node(state: RedTeamState) -> dict:
         logger.warning("judge_node: pending_attempt yok, puanlanacak saldırı yok.")
         return {}
 
+    # Kota/altyapı hatası (429): bu tur hedefin gerçek yanıtı değil. Puanlama,
+    # attack_history'e/başarısızlara YAZMA — aksi halde analyzer bunu "teknik
+    # tuttu (savunma)" diye yanlış öğrenir. Ayrı errored_attacks'e koy, kampanyayı
+    # kapat (bir sonraki tur temiz yeni kampanya başlar).
+    if pending.get("infra_error"):
+        logger.warning("judge_node: kota/altyapı hatalı tur atlandı (öğrenmeye yazılmadı).")
+        return {
+            "pending_attempt": {},
+            "errored_attacks": [pending],
+            "campaign_active": False,
+        }
+
     verdict = evaluate_attack(
         system_prompt=state.get("target_system", ""),
         attack_prompt=pending.get("prompt", ""),

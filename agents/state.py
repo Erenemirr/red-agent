@@ -65,6 +65,7 @@ class AttackAttempt(TypedDict, total=False):
     response: str                      # hedefin yanıtı
     verdict: JudgeVerdict              # judge sonucu
     trace_id: str                      # Phoenix trace referansı (analyzer için)
+    infra_error: bool                  # yanıt kota/altyapı hatası mı (öğrenmeye yazılmaz)?
 
 
 class HumanDecision(TypedDict, total=False):
@@ -119,6 +120,9 @@ class RedTeamState(TypedDict, total=False):
     attack_history: Annotated[list[AttackAttempt], _append_list]
     successful_attacks: Annotated[list[AttackAttempt], _append_list]
     failed_attacks: Annotated[list[AttackAttempt], _append_list]
+    # Kota/altyapı (429) nedeniyle puanlanamayan turlar — öğrenmeden hariç,
+    # yalnızca şeffaflık/rapor için tutulur.
+    errored_attacks: Annotated[list[AttackAttempt], _append_list]
 
     # --- Döngü kontrolü ---
     current_round: int                 # kaçıncı tur
@@ -165,6 +169,7 @@ def make_initial_state(
         attack_history=[],
         successful_attacks=[],
         failed_attacks=[],
+        errored_attacks=[],
         current_round=0,
         max_rounds=max_rounds,
         critical_count=0,

@@ -88,7 +88,12 @@ def build_markdown(state: RedTeamState, summary: dict) -> str:
                  f"(başarı oranı %{summary['success_rate'] * 100:.0f})")
     lines.append(f"- Kritik açık: **{summary['critical']}**")
     lines.append(f"- Ortalama skor: **{summary['avg_score']}**")
-    lines.append(f"- Human-in-the-loop onayı istendi: **{state.get('human_interrupt_count', 0)}** kez\n")
+    lines.append(f"- Human-in-the-loop onayı istendi: **{state.get('human_interrupt_count', 0)}** kez")
+    errored = state.get("errored_attacks", [])
+    if errored:
+        lines.append(f"- ⚠️ API kota/altyapı hatası nedeniyle atlanan tur: **{len(errored)}** "
+                     "(bu turlar başarı/başarısızlık istatistiğine dahil DEĞİL)")
+    lines.append("")
 
     if summary["success_by_category"]:
         lines.append("En etkili saldırı kategorileri:")
@@ -167,6 +172,7 @@ def build_json(state: RedTeamState, summary: dict) -> dict:
         "rounds_run": state.get("current_round", 0),
         "max_rounds": state.get("max_rounds", settings.max_rounds),
         "summary": summary,
+        "errored_attempts": len(state.get("errored_attacks", [])),
         "technique_objective_breakdown": [
             {"technique": tech, "objective_category": objc,
              "attempts": m["attempts"], "successes": m["successes"]}

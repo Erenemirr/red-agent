@@ -11,6 +11,10 @@ Eski `google-generativeai` SDK'sından (deprecated) buraya geçildi.
 from __future__ import annotations
 
 import logging
+import random
+import re
+import threading
+import time
 
 from config.settings import settings
 from tools import usage
@@ -18,6 +22,112 @@ from tools import usage
 logger = logging.getLogger(__name__)
 
 _client = None  # tembel başlatılan singleton istemci
+
+
+class QuotaExceededError(RuntimeError):
+    """429 / RESOURCE_EXHAUSTED — free-tier kota/RPM aşımı, retry'lar tükendi.
+
+    Çağıran taraf bunu "hedefin savunması" değil "altyapı hatası" olarak ele
+    almalı (öğrenme verisine yazılmamalı).
+    """
+
+
+# --- 429 tespiti ve backoff ----------------------------------------------------
+
+# Sunucu "30s" / "retryDelay: 12" gibi bir bekleme önerirse onu yakala.
+_RETRY_DELAY_RE = re.compile(r"retry.?delay['\":\s]*['\"]?(\d+(?:\.\d+)?)\s*s?", re.I)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """İstisna bir 429 / kota aşımı mı? (SDK sürümünden bağımsız, dayanıklı tespit.)"""
+    if isinstance(exc, QuotaExceededError):
+        return True
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code == 429:
+        return True
+    text = str(exc).lower()
+    return "429" in text or "resource_exhausted" in text or "rate limit" in text
+
+
+def _server_retry_delay(exc: Exception) -> float | None:
+    """Sunucunun önerdiği bekleme süresini (sn) çıkar — yoksa None."""
+    m = _RETRY_DELAY_RE.search(str(exc))
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _backoff_seconds(attempt: int, exc: Exception) -> float:
+    """attempt. (0-tabanlı) yeniden deneme için beklenecek süre.
+
+    Öncelik sunucunun retryDelay'i; yoksa üstel backoff (base * 2**attempt).
+    Küçük bir jitter eklenir (aynı anda birden çok çağrının senkron çarpmasını
+    önler) ve `gemini_retry_max_delay` ile kırpılır.
+    """
+    server = _server_retry_delay(exc)
+    if server is not None:
+        base = server
+    else:
+        base = settings.gemini_retry_base_delay * (2 ** attempt)
+    base = min(base, settings.gemini_retry_max_delay)
+    return base + random.uniform(0, 0.5)
+
+
+# --- Proaktif hız sınırı (RPM) -------------------------------------------------
+
+_rate_lock = threading.Lock()
+_last_call_ts = 0.0
+
+
+def _throttle() -> None:
+    """Free-tier RPM'i aşmamak için çağrılar arası minimum aralığı uygula.
+
+    `gemini_rpm <= 0` ise no-op (varsayılan). Aksi halde ardışık çağrılar
+    60/RPM saniye arayla sıraya alınır — 429 hiç oluşmaz.
+    """
+    rpm = settings.gemini_rpm
+    if rpm <= 0:
+        return
+    min_interval = 60.0 / rpm
+    global _last_call_ts
+    with _rate_lock:
+        now = time.monotonic()
+        wait = _last_call_ts + min_interval - now
+        if wait > 0:
+            logger.info("Rate limit (RPM=%d): %.1fs bekleniyor.", rpm, wait)
+            time.sleep(wait)
+            now = time.monotonic()
+        _last_call_ts = now
+
+
+def _execute(role: str, call):
+    """`call` (0-argümanlı) Gemini çağrısını throttle + retry ile çalıştır.
+
+    429 gelince backoff'la yeniden dener; denemeler tükenince
+    `QuotaExceededError` fırlatır. 429 dışındaki hataları olduğu gibi yükseltir.
+    Usage yalnızca gerçekten API'ye gidilen her denemede kaydedilir.
+    """
+    max_retries = settings.gemini_max_retries
+    attempt = 0
+    while True:
+        _throttle()
+        usage.record(role)
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001
+            if not _is_rate_limit_error(exc):
+                raise
+            if attempt >= max_retries:
+                logger.warning("Gemini 429: %d deneme sonrası pes edildi.", max_retries)
+                raise QuotaExceededError(str(exc)) from exc
+            wait = _backoff_seconds(attempt, exc)
+            logger.info("Gemini 429 (deneme %d/%d) — %.1fs sonra yeniden.",
+                        attempt + 1, max_retries, wait)
+            time.sleep(wait)
+            attempt += 1
 
 
 def available() -> bool:
@@ -73,12 +183,12 @@ def generate(
     if json_mode:
         config_kwargs["response_mime_type"] = "application/json"
 
-    usage.record(role)
-    return client.models.generate_content(
+    # throttle + 429 retry `_execute` içinde; kota tükenirse QuotaExceededError.
+    return _execute(role, lambda: client.models.generate_content(
         model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(**config_kwargs),
-    )
+    ))
 
 
 def generate_chat(
@@ -109,12 +219,11 @@ def generate_chat(
     if system_instruction:
         config_kwargs["system_instruction"] = system_instruction
 
-    usage.record(role)
-    return client.models.generate_content(
+    return _execute(role, lambda: client.models.generate_content(
         model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(**config_kwargs),
-    )
+    ))
 
 
 def safe_text(response) -> str:
