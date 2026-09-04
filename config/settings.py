@@ -89,6 +89,25 @@ class Settings:
         default_factory=lambda: _get_bool("SKIP_LLM_JUDGE_ON_RULE_HIT", True)
     )
 
+    # --- 429 (kota) dayanıklılığı ---
+    # 429/RESOURCE_EXHAUSTED alınırsa kaç kez yeniden denensin (0 = deneme yok).
+    gemini_max_retries: int = field(
+        default_factory=lambda: _get_int("GEMINI_MAX_RETRIES", 5)
+    )
+    # Üstel backoff taban gecikmesi (sn): i. denemede ~base * 2**i beklenir.
+    # Sunucu yanıtında retryDelay varsa o önceliklidir.
+    gemini_retry_base_delay: float = field(
+        default_factory=lambda: _get_float("GEMINI_RETRY_BASE_DELAY", 2.0)
+    )
+    # Tek bir backoff beklemesinin üst sınırı (sn) — çok uzun beklemeyi kırpar.
+    gemini_retry_max_delay: float = field(
+        default_factory=lambda: _get_float("GEMINI_RETRY_MAX_DELAY", 60.0)
+    )
+    # Proaktif hız sınırı: dakikada izin verilen çağrı (RPM). 0 = kapalı.
+    # Free-tier gemini-2.5-flash ~5 RPM; 5 verirsen çağrılar 12sn arayla gider,
+    # 429 hiç oluşmaz ama run yavaşlar. Varsayılan 0: retry+backoff yeter.
+    gemini_rpm: int = field(default_factory=lambda: _get_int("GEMINI_RPM", 0))
+
     # --- Arize Phoenix ---
     phoenix_api_key: str = field(
         default_factory=lambda: os.getenv("PHOENIX_API_KEY", "")
@@ -129,6 +148,15 @@ class Settings:
     # (exploit çöküşü) önler, çeşitliliği korur. 0.0 = hep exploit, 1.0 = hep keşif.
     explore_epsilon: float = field(
         default_factory=lambda: _get_float("EXPLORE_EPSILON", 0.3)
+    )
+
+    # --- API güvenliği (FastAPI) ---
+    # İstemcilerin /scan /resume için göndermesi gereken anahtar (X-API-Key header).
+    # Boşsa auth KAPALIDIR (dev/mock/test açık kalsın diye).
+    api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""))
+    # İstemci (IP) başına dakikadaki maksimum istek. 0 = rate limit kapalı.
+    rate_limit_per_minute: int = field(
+        default_factory=lambda: _get_int("RATE_LIMIT_PER_MINUTE", 60)
     )
 
     # --- Genel ---

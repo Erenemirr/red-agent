@@ -305,3 +305,183 @@ class TestAttackerHelpers:
 
     def test_load_categories_has_12(self):
         assert len(load_categories()) == 12
+
+
+# --- tools/gemini: 429 dayanıklılığı (B1) -------------------------------------
+
+import pytest
+
+
+class TestGeminiResilience:
+    def test_is_rate_limit_detects_429(self):
+        assert gemini._is_rate_limit_error(RuntimeError("429 RESOURCE_EXHAUSTED"))
+        assert gemini._is_rate_limit_error(gemini.QuotaExceededError("x"))
+
+        class _E(Exception):
+            code = 429
+        assert gemini._is_rate_limit_error(_E())
+
+    def test_is_rate_limit_ignores_other(self):
+        assert gemini._is_rate_limit_error(ValueError("boş yanıt (block)")) is False
+
+    def test_server_retry_delay_parsed(self):
+        assert gemini._server_retry_delay(RuntimeError("retryDelay: 30s")) == 30.0
+        assert gemini._server_retry_delay(RuntimeError("hiçbir şey yok")) is None
+
+    def test_backoff_uses_server_delay(self):
+        d = gemini._backoff_seconds(0, RuntimeError("retryDelay: 5s"))
+        assert 5.0 <= d <= 5.5   # server önceliği + küçük jitter
+
+    def test_backoff_exponential_and_capped(self):
+        d1 = gemini._backoff_seconds(1, RuntimeError("no delay"))
+        assert 4.0 <= d1 <= 4.5  # base 2.0 * 2**1
+        d_big = gemini._backoff_seconds(20, RuntimeError("no delay"))
+        assert d_big <= gemini.settings.gemini_retry_max_delay + 0.5  # kırpıldı
+
+    def test_execute_retries_then_succeeds(self, monkeypatch):
+        monkeypatch.setattr(gemini.time, "sleep", lambda *_: None)
+        n = {"c": 0}
+
+        def call():
+            n["c"] += 1
+            if n["c"] < 3:
+                raise RuntimeError("429 rate limit exceeded")
+            return "tamam"
+
+        assert gemini._execute("attacker", call) == "tamam"
+        assert n["c"] == 3   # 2 başarısız + 1 başarılı
+
+    def test_execute_raises_quota_after_exhaust(self, monkeypatch):
+        monkeypatch.setattr(gemini.time, "sleep", lambda *_: None)
+        with pytest.raises(gemini.QuotaExceededError):
+            gemini._execute("attacker", lambda: (_ for _ in ()).throw(
+                RuntimeError("429 RESOURCE_EXHAUSTED")))
+
+    def test_execute_non_429_propagates(self, monkeypatch):
+        monkeypatch.setattr(gemini.time, "sleep", lambda *_: None)
+        with pytest.raises(ValueError):
+            gemini._execute("judge", lambda: (_ for _ in ()).throw(ValueError("başka")))
+
+    def test_throttle_noop_when_rpm_zero(self):
+        # Varsayılan RPM=0 → beklemeden döner (yavaşlatmaz).
+        gemini._throttle()  # exception atmamalı
+
+
+# --- Kota hatalı turun öğrenmeden hariç tutulması (B1) ------------------------
+
+from agents.judge import judge_node
+from agents.target import GeminiTarget, TargetResponse
+from agents import target as target_mod
+
+
+class TestInfraErrorHandling:
+    def test_judge_skips_infra_error(self):
+        state = {"pending_attempt": {"round": 1, "category": "role-playing",
+                                     "infra_error": True}}
+        out = judge_node(state)
+        assert out["pending_attempt"] == {}
+        assert out["errored_attacks"][0].get("infra_error") is True
+        assert out["campaign_active"] is False
+        # ÖĞRENMEYE yazılmamalı:
+        assert "attack_history" not in out
+        assert "failed_attacks" not in out
+        assert "successful_attacks" not in out
+
+    def test_target_marks_infra_error(self, monkeypatch):
+        monkeypatch.setattr(gemini, "generate", lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("429 RESOURCE_EXHAUSTED")))
+        r = GeminiTarget("sp").generate("saldır")
+        assert r.infra_error is True and not r.ok
+
+    def test_target_node_infra_skips_conversation(self, monkeypatch):
+        class _FakeTarget:
+            def generate_conversation(self, conv):
+                return TargetResponse(text="", model="m", error="429", infra_error=True)
+
+        monkeypatch.setattr(target_mod, "build_target", lambda sp: _FakeTarget())
+        state = {"pending_attempt": {"prompt": "x"}, "conversation": [],
+                 "target_system": "sp"}
+        out = target_mod.target_node(state)
+        assert out["pending_attempt"]["infra_error"] is True
+        assert "conversation" not in out  # sahte model turu eklenmedi
+
+
+# --- security: API-key auth + rate limiting -----------------------------------
+
+import time
+from types import SimpleNamespace
+from fastapi import HTTPException
+import security
+
+
+class TestApiKeyAuth:
+    def test_disabled_when_unset(self, monkeypatch):
+        monkeypatch.setattr(security, "settings", SimpleNamespace(api_key=""))
+        assert security.require_api_key(x_api_key=None) is None  # açık geçer
+
+    def test_rejects_missing_key(self, monkeypatch):
+        monkeypatch.setattr(security, "settings", SimpleNamespace(api_key="gizli"))
+        with pytest.raises(HTTPException) as e:
+            security.require_api_key(x_api_key=None)
+        assert e.value.status_code == 401
+
+    def test_rejects_wrong_key(self, monkeypatch):
+        monkeypatch.setattr(security, "settings", SimpleNamespace(api_key="gizli"))
+        with pytest.raises(HTTPException) as e:
+            security.require_api_key(x_api_key="yanlis")
+        assert e.value.status_code == 401
+
+    def test_accepts_correct_key(self, monkeypatch):
+        monkeypatch.setattr(security, "settings", SimpleNamespace(api_key="gizli"))
+        assert security.require_api_key(x_api_key="gizli") is None
+
+
+class TestRateLimiter:
+    def test_allows_under_limit(self):
+        rl = security.SlidingWindowRateLimiter(max_per_minute=3)
+        for _ in range(3):
+            rl.check("1.2.3.4")  # limit içinde — raise yok
+
+    def test_blocks_over_limit(self):
+        rl = security.SlidingWindowRateLimiter(max_per_minute=2)
+        rl.check("ip")
+        rl.check("ip")
+        with pytest.raises(HTTPException) as e:
+            rl.check("ip")
+        assert e.value.status_code == 429
+        assert "Retry-After" in e.value.headers
+
+    def test_per_client_isolated(self):
+        rl = security.SlidingWindowRateLimiter(max_per_minute=1)
+        rl.check("client-a")
+        rl.check("client-b")  # farklı istemci → etkilenmez
+
+    def test_window_slides(self):
+        # Pencere çok kısa: eski vuruş düşünce yeni istek kabul edilir.
+        rl = security.SlidingWindowRateLimiter(max_per_minute=1, window=0.05)
+        rl.check("ip")
+        time.sleep(0.06)
+        rl.check("ip")  # eski vuruş penceden çıktı → raise yok
+
+    def test_zero_disables_limit(self):
+        rl = security.SlidingWindowRateLimiter(max_per_minute=0)
+        for _ in range(100):
+            rl.check("ip")  # 0 = kapalı
+
+
+class TestApiSecurityIntegration:
+    def test_scan_401_when_key_configured(self, monkeypatch):
+        # Auth açıkken anahtarsız /scan isteği 401 almalı.
+        monkeypatch.setattr(security, "settings", SimpleNamespace(api_key="gizli"))
+        from fastapi.testclient import TestClient
+        from api import app
+        client = TestClient(app)
+        r = client.post("/scan", json={"target_system": "x" * 20})
+        assert r.status_code == 401
+
+    def test_health_open_without_key(self, monkeypatch):
+        monkeypatch.setattr(security, "settings", SimpleNamespace(api_key="gizli"))
+        from fastapi.testclient import TestClient
+        from api import app
+        client = TestClient(app)
+        assert client.get("/health").status_code == 200  # /health auth'suz

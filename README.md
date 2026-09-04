@@ -49,11 +49,17 @@ Attacker toward what has worked — even across separate sessions.
   - *Objective × technique* learning (picks the best technique for each objective type).
 - **12 attack techniques × 105 objectives** — objectives sourced from the real
   [JailbreakBench](https://github.com/JailbreakBench/jailbreakbench) benchmark + LLM-security goals.
+- **Free-tier resilience** — automatic retry-with-backoff on `429 RESOURCE_EXHAUSTED`
+  (honors the server's `retryDelay`), optional proactive RPM throttle, and — crucially —
+  quota-errored turns are **excluded from learning** so a rate-limit never gets mislearned
+  as "the target defended."
 - **Human-in-the-loop** — pauses at a configurable critical-finding threshold (CLI prompt or
   REST `/resume` endpoint), powered by LangGraph `interrupt()` + checkpointing.
+- **API security** — optional `X-API-Key` auth + per-client sliding-window rate limiting
+  on the FastAPI endpoints (no external deps; `/health` stays open for probes).
 - **Full observability** — every node and Gemini call traced to Arize Phoenix.
 - **Three interfaces** — CLI, REST API (FastAPI), and LangGraph Studio. Containerized with Docker.
-- **83 hermetic tests** — run with zero API quota (mock mode), deterministic, fast.
+- **106 hermetic tests** — run with zero API quota (mock mode), deterministic, fast.
 
 ---
 
@@ -102,6 +108,7 @@ LangGraph reducers (append-only lists for history, overwrite for scalars).
 red-agent/
 ├── main.py                 # CLI entry point + LangGraph wiring (graph, run, tracing)
 ├── api.py                  # FastAPI app (/health, /scan, /resume)
+├── security.py             # API-key auth + in-memory rate limiting
 ├── config/settings.py      # env vars & constants
 ├── agents/
 │   ├── state.py            # RedTeamState + reducers
@@ -120,7 +127,7 @@ red-agent/
 │   ├── attack_categories.json    # 12 attack techniques
 │   ├── jailbreak_objectives.json # 105 objectives (JailbreakBench + LLM-security)
 │   └── target_systems/           # example target system prompts
-├── tests/                  # 83 hermetic tests
+├── tests/                  # 106 hermetic tests
 ├── reports/                # generated reports
 ├── Dockerfile / docker-compose.yml
 └── requirements.txt
@@ -212,7 +219,7 @@ docker compose up --build      # API on http://localhost:8000
 ### Tests
 
 ```bash
-pytest            # 83 hermetic tests, no API quota used
+pytest            # 106 hermetic tests, no API quota used
 pytest -v         # verbose
 ```
 
@@ -264,6 +271,11 @@ the target leak its system prompt."*
 | `EXPLORE_EPSILON` | `0.3` | Epsilon-greedy exploration rate |
 | `GEMINI_MAX_OUTPUT_TOKENS` | `1024` | Token cap per call |
 | `SKIP_LLM_JUDGE_ON_RULE_HIT` | `true` | Skip LLM judge when rule-based already confident |
+| `GEMINI_MAX_RETRIES` | `5` | Retries on `429` before giving up (raises `QuotaExceededError`) |
+| `GEMINI_RETRY_BASE_DELAY` | `2.0` | Exponential backoff base (server `retryDelay` wins) |
+| `GEMINI_RPM` | `0` | Proactive rate limit (calls/min); `0` = off, `5` = free-tier safe |
+| `API_KEY` | — | `X-API-Key` required on `/scan` `/resume` (empty → auth off) |
+| `RATE_LIMIT_PER_MINUTE` | `60` | Max requests/min per client IP (`0` = off) |
 | `ENABLE_TRACING` | `true` | Phoenix tracing on/off |
 
 ## Observability

@@ -19,13 +19,14 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from config.settings import settings
 from main import get_app_graph, setup_tracing
 from agents.state import make_initial_state
+from security import rate_limit, require_api_key
 from tools import usage
 
 logger = logging.getLogger("red_team.api")
@@ -153,11 +154,17 @@ def health():
         "status": "ok",
         "gemini_configured": bool(settings.gemini_api_key),
         "tracing_enabled": settings.enable_tracing and bool(settings.phoenix_api_key),
+        "auth_enabled": bool(settings.api_key),
+        "rate_limit_per_minute": settings.rate_limit_per_minute,
         "model": settings.gemini_model,
     }
 
 
-@app.post("/scan", response_model=ScanResult)
+@app.post(
+    "/scan",
+    response_model=ScanResult,
+    dependencies=[Depends(require_api_key), Depends(rate_limit)],
+)
 def scan(req: ScanRequest):
     """Tarama başlat. İnterrupt'a takılırsa 'interrupted' döner (resume bekler)."""
     usage.reset()
@@ -178,7 +185,11 @@ def scan(req: ScanRequest):
     return _to_result(result, thread_id)
 
 
-@app.post("/resume", response_model=ScanResult)
+@app.post(
+    "/resume",
+    response_model=ScanResult,
+    dependencies=[Depends(require_api_key), Depends(rate_limit)],
+)
 def resume(req: ResumeRequest):
     """Duraklatılmış taramayı operatör kararıyla sürdür (continue/stop)."""
     graph = get_app_graph()
